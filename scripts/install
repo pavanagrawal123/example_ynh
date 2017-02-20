@@ -14,7 +14,12 @@ set -eu
 # guaranteed to be unique. This is a good unique identifier to define installation path,
 # db names, ...
 app=$YNH_APP_INSTANCE_NAME
-
+readonly APP=$YNH_APP_INSTANCE_NAME
+readonly DOMAIN=$YNH_APP_ARG_DOMAIN
+readonly APP_URI=$YNH_APP_ARG_PATH
+readonly APP_ADMIN=$YNH_APP_ARG_ADMIN
+readonly APP_IS_PUBLIC=$YNH_APP_ARG_IS_PUBLIC
+readonly APP_LANGUAGE=$YNH_APP_ARG_LANGUAGE
 # Retrieve arguments
 domain=$YNH_APP_ARG_DOMAIN
 path_url=$YNH_APP_ARG_PATH
