@@ -21,72 +21,180 @@ path_url=$YNH_APP_ARG_PATH
 admin=$YNH_APP_ARG_ADMIN
 is_public=$YNH_APP_ARG_IS_PUBLIC
 language=$YNH_APP_ARG_LANGUAGE
+# Exit on command errors and treat unset variables as an error
+set -eu
+readonly APP_INSTALL_PATH="/var/www/rocket-chat"
+readonly SYSTEMD_CONF_TEMPLATE="$PWD/../conf/systemd.conf"
+readonly NGINX_CONF_TEMPLATE="$PWD/../conf/nginx.conf"
+
+readonly METEOR_INSTALL_DIR="/opt/meteor"
+readonly NVM_INSTALL_DIR="/opt/nvm"
+readonly METEOR_BIN="/usr/local/bin/meteor"
 
 # Source YunoHost helpers
 source /usr/share/yunohost/helpers
 
-# Save app settings
-ynh_app_setting_set "$app" admin "$admin"
-ynh_app_setting_set "$app" is_public "$is_public"
-ynh_app_setting_set "$app" language "$language"
+function configure_app()
+{
+    # Save app settings
+    ynh_app_setting_set "$APP" admin     "$APP_ADMIN"
+    ynh_app_setting_set "$APP" is_public "$APP_IS_PUBLIC"
+    ynh_app_setting_set "$APP" language  "$APP_LANGUAGE"
 
-# Check domain/path availability
-sudo yunohost app checkurl "${domain}${path_url}" -a "$app" \
-    || ynh_die "Path not available: ${domain}${path_url}"
+    # Check domain/path availability
+    sudo yunohost app checkurl "${DOMAIN}${APP_URI}" -a "$APP" \
+        || ynh_die "Path not available: ${DOMAIN}${APP_URI}"
+}
+    
+function create_user_rocket()
+{
+    if [[  -z $(sudo getent passwd rocket) ]]
+    then
+        sudo useradd rocket
+    fi
+}
 
-# Copy source files
-src_path=/var/www/$app
-sudo mkdir -p $src_path
-sudo cp -a ../sources/. $src_path
+function install_node()
+{
+    local nvm_install_script="https://raw.githubusercontent.com/creationix/nvm/v0.32.1/install.sh"
+  
+    if [ ! -d "$NVM_INSTALL_DIR" ];
+    then
+        sudo mkdir $NVM_INSTALL_DIR
+    fi
+    sudo chown -R wekan $NVM_INSTALL_DIR
+    cd $NVM_INSTALL_DIR
 
-# Set permissions to app files
-# you may need to make some file and/or directory writeable by www-data (nginx user)
-sudo chown -R root: $src_path
+    # Install nvm
+    sudo curl -o- $nvm_install_script | sudo NVM_DIR=$NVM_INSTALL_DIR bash
 
-### MySQL (can be removed if not used) ###
-# If your app use a MySQL database you can use these lines to bootstrap
-# a database, an associated user and save the password in app settings.
-#
-# # Generate MySQL password and create database
-# dbuser=$app
-# dbname=$app
-# dbpass=$(ynh_string_random 12)
-# ynh_app_setting_set "$app" mysqlpwd "$dbpass"
-# ynh_mysql_create_db "$dbname" "$dbuser" "$dbpass"
-#
-# # Load initial SQL into the new database
-# ynh_mysql_connect_as "$dbuser" "$dbpass" "$dbname" \
-#     < "../sources/sql/mysql.init.sql"
-### MySQL end ###
+    # Install latest nodejs
+    sudo su -c ". $NVM_INSTALL_DIR/nvm.sh && nvm install 0.10"
+}
 
-# Modify Nginx configuration file and copy it to Nginx conf directory
-nginx_conf=../conf/nginx.conf
-sed -i "s@YNH_WWW_PATH@$path_url@g" $nginx_conf
-sed -i "s@YNH_WWW_ALIAS@$src_path/@g" $nginx_conf
-# If a dedicated php-fpm process is used:
-# Don't forget to modify ../conf/nginx.conf accordingly or your app will not work!
-# sed -i "s@YNH_WWW_APP@$app@g" $nginx_conf
-sudo cp $nginx_conf /etc/nginx/conf.d/$domain.d/$app.conf
+function add_swap_if_needed()
+{
+    local available_swap=$(free | tail -n 1 | awk '{print $2}')
+    local tmp_swap_file=/tmp/wekan_swapfile
 
-### PHP (can be removed if not used) ###
-# If a dedicated php-fpm process is used:
-# Don't forget to modify ../conf/php-fpm.conf accordingly or your app will not work!
-#
-# # Modify PHP-FPM pool configuration and copy it to the pool directory
-# sed -i "s@YNH_WWW_APP@$app@g" ../conf/php-fpm.conf
-# sed -i "s@YNH_WWW_ALIAS@$src_path/@g" ../conf/php-fpm.conf
-# finalphpconf=/etc/php5/fpm/pool.d/$app.conf
-# sudo cp ../conf/php-fpm.conf $finalphpconf
-# sudo chown root: $finalphpconf
-# sudo chmod 644 $finalphpconf
-# sudo service php5-fpm reload
-### PHP end ###
+    if [ $available_swap -lt 1000000 ];
+    then
+        # It is NOT possible to setup a swap file on a tmpfs filesystem
+        if [[ ! -z $(mount | grep /tmp | grep tmpfs) ]];
+        then
+            tmp_swap_file=/var/cache/wekan_swapfile
+        fi
 
-# If app is public, add url to SSOWat conf as skipped_uris
-if [[ $is_public -eq 1 ]]; then
-  # unprotected_uris allows SSO credentials to be passed anyway.
-  ynh_app_setting_set "$app" unprotected_uris "/"
-fi
+        sudo dd if=/dev/zero of=$tmp_swap_file bs=1M count=1024
+        sudo chmod 600 $tmp_swap_file
+        sudo mkswap $tmp_swap_file
+        sudo swapon $tmp_swap_file
+    fi
+}
 
-# Reload services
-sudo service nginx reload
+function install_meteor()
+{
+    # Install meteor
+    if [ ! -d "$METEOR_INSTALL_DIR" ];
+    then
+        sudo mkdir $METEOR_INSTALL_DIR
+    fi
+    sudo chown -R wekan $METEOR_INSTALL_DIR
+    cd $METEOR_INSTALL_DIR
+    sudo su -c "curl https://install.meteor.com/ | sh"
+}
+
+function install_and_build_rocket-chat()
+{
+    local npm_bin=`sudo su -c ". $NVM_INSTALL_DIR/nvm.sh && nvm use 0.10 >/dev/null && which npm"`
+    
+    # Give all permissions to app dir to user wekan
+    if [ -d "$APP_INSTALL_PATH" ];
+    then
+        sudo rm -rf $APP_INSTALL_PATH
+    fi
+    sudo mkdir -p $APP_INSTALL_PATH
+    sudo chown -R rocket $APP_INSTALL_PATH
+    cd $APP_INSTALL_PATH
+    
+    # Clone wekan github repo
+    sudo su rocket curl -L https://rocket.chat/releases/latest/download -o rocket.chat.tgz
+
+    # Install dependencies with npm
+    sudo su rocket tar zxvf rocket.chat.tgz
+    # Move
+    sudo su rocket mv bundle Rocket.Chat
+    # CD
+    sudo su rocket cd Rocket.Chat/programs/server
+    # npm install 
+    sudo su rocket npm install
+    su rocket export ROOT_URL=$domain
+    su rocket export MONGO_URL=mongodb://localhost:27017/rocketchat
+    su rocket export PORT=3000
+    
+}
+
+function remove_swap()
+{
+    local file1="/tmp/wekan_swapfile"
+    local file2="/var/cache/wekan_swapfile"
+
+    if [ -f $file1 ]; then
+	    sudo swapoff $file1
+	    sudo rm -f $file1
+    fi
+    if [ -f $file2 ]; then
+        sudo swapoff $file2
+        sudo rm -f $file2
+    fi
+}
+
+function install_mongodb()
+{
+    # Install mongodb
+    sudo apt-key adv --keyserver hkp://keyserver.ubuntu.com:80 --recv EA312927
+    echo "deb http://repo.mongodb.org/apt/ubuntu xenial/mongodb-org/3.2 multiverse" | sudo tee /etc/apt/sources.list.d/mongodb-org-3.2.list
+    sudo apt-get update
+    sudo apt-get install -y mongodb-org=3.2.11 mongodb-org-server=3.2.11 mongodb-org-shell=3.2.11 mongodb-org-mongos=3.2.11 mongodb-org-tools=3.2.11
+    sudo systemctl start mongod
+    sudo systemctl enable mongod
+}
+
+function setup_systemd_service()
+{
+    cd $APP_INSTALL_PATH
+    sudo su rocket cd Rocket.Chat/programs/server
+    sudo su rocket npm install -g forever
+    sudo su rocket npm install -g forever-service
+    sudo forever-service install -s main.js -e "ROOT_URL=https://main.agrawalcloud.tk MONGO_URL=mongodb://localhost:27017/rocketchat PORT=3000" rocketchat
+    # Start service
+    sudo su rocket start rocketchat
+}
+
+function configure_nginx_and_ssowat()
+{
+    # Modify Nginx configuration file and copy it to Nginx conf directory
+    sed -i "s@YNH_WWW_PATH@$APP_URI@g" $NGINX_CONF_TEMPLATE
+    sed -i "s@YNH_WWW_ALIAS@$APP_INSTALL_PATH/@g" $NGINX_CONF_TEMPLATE
+    sudo cp $NGINX_CONF_TEMPLATE /etc/nginx/conf.d/$DOMAIN.d/$APP.conf
+
+    # If app is public, add url to SSOWat conf as skipped_uris
+    if [[ $APP_IS_PUBLIC -eq 1 ]]; then
+        # unprotected_uris allows SSO credentials to be passed anyway.
+        ynh_app_setting_set "$APP" unprotected_uris "/"
+    fi
+
+    sudo service nginx reload
+}
+
+
+configure_app
+create_user_rocket
+install_node
+add_swap_if_needed
+install_meteor
+install_and_build_rocket-chat
+remove_swap
+install_mongodb
+setup_systemd_service
+configure_nginx_and_ssowat
