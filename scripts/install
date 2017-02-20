@@ -123,19 +123,19 @@ function install_and_build_rocket-chat()
     cd $APP_INSTALL_PATH
     
     # Clone wekan github repo
-    sudo su rocket curl -L https://rocket.chat/releases/latest/download -o rocket.chat.tgz
+    sudo su rocket -c "curl -L https://rocket.chat/releases/latest/download -o rocket.chat.tgz"
 
     # Install dependencies with npm
-    sudo su rocket tar zxvf rocket.chat.tgz
+    sudo su rocket -c "tar zxvf rocket.chat.tgz"
     # Move
-    sudo su rocket mv bundle Rocket.Chat
+    sudo su rocket -c "mv bundle Rocket.Chat"
     # CD
-    sudo su rocket cd Rocket.Chat/programs/server
+    sudo su rocket -c "cd Rocket.Chat/programs/server"
     # npm install 
-    sudo su rocket npm install
-    su rocket export ROOT_URL=$domain
-    su rocket export MONGO_URL=mongodb://localhost:27017/rocketchat
-    su rocket export PORT=3000
+    sudo su rocket -c "npm install"
+    sudo su rocket -c "export ROOT_URL=$domain"
+    sudo su rocket -c "export MONGO_URL=mongodb://localhost:27017/rocketchat"
+    sudo su rocket -c "export PORT=3000"
     
 }
 
@@ -167,13 +167,20 @@ function install_mongodb()
 
 function setup_systemd_service()
 {
-    cd $APP_INSTALL_PATH
-    sudo su rocket cd Rocket.Chat/programs/server
-    sudo su rocket npm install -g forever
-    sudo su rocket npm install -g forever-service
-    sudo forever-service install -s main.js -e "ROOT_URL=https://main.agrawalcloud.tk MONGO_URL=mongodb://localhost:27017/rocketchat PORT=3000" rocketchat
+       # Install systemd conf
+    local node_bin=`sudo su -c ". $NVM_INSTALL_DIR/nvm.sh && nvm use 0.10 >/dev/null && which node"`
+    sed -i "s@WEKAN_INSTALL_PATH@$APP_INSTALL_PATH/Rocket.chat/programs/server@g" $SYSTEMD_CONF_TEMPLATE
+    sed -i "s@WEKAN_NODEJS_PATH@$node_bin@g"                     $SYSTEMD_CONF_TEMPLATE
+    sed -i "s@WEKAN_DOMAIN@$DOMAIN@g"                            $SYSTEMD_CONF_TEMPLATE
+    sed -i "s@WEKAN_URI@$APP_URI@g"                              $SYSTEMD_CONF_TEMPLATE
+    sed -i "s@WEKAN_DB_NAME@rocketchat@g"                             $SYSTEMD_CONF_TEMPLATE
+    sed -i "s@WEKAN_PORT@3000@g"                                 $SYSTEMD_CONF_TEMPLATE
+    sudo cp $SYSTEMD_CONF_TEMPLATE /etc/systemd/system/rocketchat.service
+
     # Start service
-    sudo su rocket start rocketchat
+    sudo systemctl daemon-reload
+    sudo systemctl start rocketchat
+    sudo systemctl enable rocketchat
 }
 
 function configure_nginx_and_ssowat()
