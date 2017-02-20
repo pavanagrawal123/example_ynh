@@ -67,7 +67,7 @@ function install_node()
     then
         sudo mkdir $NVM_INSTALL_DIR
     fi
-    sudo chown -R wekan $NVM_INSTALL_DIR
+    sudo chown -R rocket $NVM_INSTALL_DIR
     cd $NVM_INSTALL_DIR
 
     # Install nvm
@@ -104,7 +104,7 @@ function install_meteor()
     then
         sudo mkdir $METEOR_INSTALL_DIR
     fi
-    sudo chown -R wekan $METEOR_INSTALL_DIR
+    sudo chown -R rocket $METEOR_INSTALL_DIR
     cd $METEOR_INSTALL_DIR
     sudo su -c "curl https://install.meteor.com/ | sh"
 }
