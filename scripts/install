@@ -133,7 +133,7 @@ function install_and_build_rocket-chat()
     sudo su rocket -c "cd Rocket.Chat/programs/server"
     # npm install 
     sudo su rocket -c "npm config set loglevel warn"
-    sudo su rocket -c "$npm_bin install"
+    sudo su rocket -c "sudo $npm_bin install"
     sudo su rocket -c "export ROOT_URL=$domain"
     sudo su rocket -c "export MONGO_URL=mongodb://localhost:27017/rocketchat"
     sudo su rocket -c "export PORT=3000"
